@@ -1,0 +1,178 @@
+---
+title: "Visualized Dashboard for Santiago air pollution data"
+author: "Chenyu Jin"
+date: "2024-11-11"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: flatly
+    orientation: columns
+    vertical_layout: fill
+    source_code: embed
+runtime: shiny
+---
+
+# import data
+
+```{r}
+RM_max_data <- read.table("RM_max_data.txt", header = TRUE, sep = "\t")
+```
+
+```{r}
+# Load necessary libraries
+library(shiny)
+library(shinythemes)
+library(leaflet)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(lubridate)
+
+# Define UI for application
+ui <- fluidPage(
+  theme = shinytheme("flatly"),
+  navbarPage("Pollution Monitoring Dashboard",
+             id = "navbar",
+             position = "fixed-top",
+             tabPanel("Station Map",
+                      fluidPage(
+                        titlePanel("Station Locations"),
+                        p("This section provides a map displaying the locations of the 13 monitoring stations in the RM_max_data dataset."),
+                        leafletOutput("stationMap")
+                      )
+             ),
+             tabPanel("Data Availability Heatmap",
+                      fluidPage(
+                        titlePanel("Pollutant Data Availability Heatmap"),
+                        p("This section shows a heatmap of available data for each pollutant across stations over time, allowing users to easily see when data is available for each pollutant at each station."),
+                        plotOutput("availabilityHeatmap", height = "800px", width = "1000px")
+                      )
+             ),
+             tabPanel("Temporal Changes",
+                      fluidPage(
+                        titlePanel("Temporal Changes of Pollutants"),
+                        p("This section provides an interactive visualization of the temporal changes of pollutants at selected stations."),
+                        fluidRow(
+                          column(6,
+                                 selectInput("selected_station", "Select Station:", choices = unique(RM_max_data$estacion)),
+                                 selectInput("selected_pollutant", "Select Pollutant:", choices = unique(RM_max_data$contaminante)),
+                                 plotOutput("timeSeriesPlot", height = "400px", width = "600px")
+                          ),
+                          column(6,
+                                 sliderInput("dateSlider", "Select Date:", 
+                                             min = min(ymd(RM_max_data$fecha)), 
+                                             max = max(ymd(RM_max_data$fecha)), 
+                                             value = min(ymd(RM_max_data$fecha)), 
+                                             timeFormat = "%Y-%m-%d",
+                                             animate = TRUE
+                                 ),
+                                 leafletOutput("pollutantMap", height = "400px", width = "600px")
+                          )
+                        )
+                      )
+             )
+  )
+)
+
+# Define server logic
+server <- function(input, output, session) {
+
+  # Extract unique station information (latitude and longitude)
+  stations <- RM_max_data |>
+    select(estacion, longitude, latitude) |>
+    distinct()
+  
+  # Standardize pollutant values for consistent circle sizes
+  RM_max_data <- RM_max_data |>
+    mutate(standardized_value = scale(registros_validados, center = TRUE, scale = TRUE))
+  
+  # Render the map with the stations
+  output$stationMap <- renderLeaflet({
+    leaflet(data = stations) |>
+      addTiles() |>
+      addCircleMarkers(
+        ~longitude, ~latitude,
+        label = ~estacion,
+        radius = 5,
+        color = "blue",
+        fillOpacity = 0.7
+      )
+  })
+  
+  # Prepare data for availability heatmap
+  heatmap_data <- RM_max_data |>
+    mutate(fecha = as.Date(fecha)) |>
+    group_by(estacion, contaminante, fecha) |>
+    summarise(available = any(!is.na(registros_validados) | !is.na(registros_preliminares) | !is.na(registros_no_validados)), .groups = 'drop') |>
+    mutate(available = as.numeric(available))
+  
+  # Render the availability heatmap
+  output$availabilityHeatmap <- renderPlot({
+    ggplot(heatmap_data, aes(x = fecha, y = contaminante, fill = available)) +
+      geom_tile() +
+      facet_grid(contaminante ~ estacion, scales = "free_y", space = "free_y") +
+      scale_fill_gradient(low = "white", high = "steelblue") +
+      theme_minimal() +
+      theme(
+        strip.text.y = element_text(angle = 0),
+        axis.text.x = element_text(angle = 45, hjust = 1)
+      ) +
+      labs(
+        title = "Pollutant Availability Heatmap",
+        x = "Date",
+        y = "Pollutant",
+        fill = "Availability"
+      )
+  })
+  
+  # Render the time series plot for the selected station and pollutant
+  output$timeSeriesPlot <- renderPlot({
+    req(input$selected_station, input$selected_pollutant)
+    filtered_data <- RM_max_data |>
+      filter(estacion == input$selected_station, contaminante == input$selected_pollutant) |>
+      mutate(fecha = as.Date(fecha))
+    
+    ggplot(filtered_data, aes(x = fecha)) +
+      geom_line(aes(y = registros_validados), color = "steelblue", na.rm = TRUE) +
+      geom_line(aes(y = registros_preliminares), color = "orange", na.rm = TRUE) +
+      geom_line(aes(y = registros_no_validados), color = "red", na.rm = TRUE) +
+      theme_minimal() +
+      labs(
+        title = paste("Time Series of", input$selected_pollutant, "at", input$selected_station),
+        x = "Date",
+        y = "Pollutant Value",
+        color = "Data Type"
+      )
+  })
+  
+  # Render the map showing pollutant values at the selected date
+  output$pollutantMap <- renderLeaflet({
+    req(input$dateSlider, input$selected_pollutant)
+    selected_date <- as.Date(input$dateSlider)
+    filtered_data <- RM_max_data |>
+      filter(fecha == selected_date, contaminante == input$selected_pollutant) |>
+      filter(!is.na(registros_validados) | !is.na(registros_preliminares) | !is.na(registros_no_validados))
+    
+    if (nrow(filtered_data) == 0) {
+      leaflet() |>
+        addTiles() |>
+        addPopups(lng = 0, lat = 0, popup = "No available data!", options = popupOptions(closeButton = FALSE))
+    } else {
+      leaflet(data = filtered_data) |>
+        addTiles() |>
+        addCircleMarkers(
+          ~longitude, ~latitude,
+          label = ~paste(estacion, "Value:", registros_validados),
+          radius = ~pmax(2, abs(standardized_value) * 5), # Scale the circle size based on standardized pollutant value
+          color = ~colorNumeric(palette = "viridis", domain = filtered_data$registros_validados)(registros_validados),
+          fillOpacity = 0.7
+        )
+    }
+  })
+}
+```
+
+```{r}
+# Run the application 
+shinyApp(ui = ui, server = server)
+```
+
