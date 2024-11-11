@@ -11,8 +11,6 @@ output:
 runtime: shiny
 ---
 
-# import data
-
 ```{r}
 RM_max_data <- read.table("RM_max_data.txt", header = TRUE, sep = "\t")
 ```
@@ -47,10 +45,10 @@ ui <- fluidPage(
                         plotOutput("availabilityHeatmap", height = "800px", width = "1000px")
                       )
              ),
-             tabPanel("Temporal Changes",
+             tabPanel("Spatial-temporal Changes",
                       fluidPage(
-                        titlePanel("Temporal Changes of Pollutants"),
-                        p("This section provides an interactive visualization of the temporal changes of pollutants at selected stations."),
+                        titlePanel("Spatial-temporal Changes of Pollutants"),
+                        p("This section provides an interactive visualization of the spatial-temporal changes of pollutants at selected stations."),
                         fluidRow(
                           column(6,
                                  selectInput("selected_station", "Select Station:", choices = unique(RM_max_data$estacion)),
@@ -171,9 +169,8 @@ server <- function(input, output, session) {
 }
 ```
 
-# Run the application
-
 ```{r}
+# Run the application 
 shinyApp(ui = ui, server = server)
 ```
 
